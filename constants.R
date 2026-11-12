@@ -1,6 +1,6 @@
 
 # local path where place names data are stored
-DATA_PATH="~/Downloads/IPN_GB_2024/IPN_GB_2024.csv"
+DATA_PATH="IPN_GB_2024/IPN_GB_2024.csv"
 
 # url where the reference data for origins and strings are stored
 WIKI_URL=paste0(
