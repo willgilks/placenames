@@ -12,154 +12,190 @@ get_wiki_placenames_lookup=function(wiki_url=WIKI_URL){
 
 
 
-# prepares wiki string and origin info for use.
-# from character columns, standardises the text strings.
-prepare_wiki_data = function(input_df = wiki_table_raw){
+
+# Alternative cleaning code for wiki data
+
+## Positions of terms are not always given, which makes pattern matching badly non-specific.
+## As a solution, infer the position using the provided examples.
+prepare_wiki_data = function(
+    input_df = wiki_table_raw,
+    key_to_languages=KEY_TO_LANGUAGES,
+    allow_string_positions=ALLOWED_STRING_POSITIONS){
   
   input_df_copy = input_df
   
-  # standardise column contents
-  clean_df=input_df_copy|>
-    rename_with(tolower)|>
-    mutate(origin2=origin,term2=term,example2=example,position2=position)|>
-    select(origin2,example2,term2,position2)|>
-    mutate(across(all_of(contains("2")),~gsub("\\s*\\[[^]]*\\]","",.x)))|>
-    mutate(across(all_of(contains("2")),~gsub("\\s*\\([^)]*\\)","",.x)))|>
-    mutate(origin2 = gsub("[/]",",",origin2)) |> 
-    mutate(origin2 = gsub(", ",",",origin2)) |> 
-    mutate(origin2 = gsub("\\s.*","",origin2)) |> 
-    mutate(term2 = tolower(term2)) |> 
-    mutate(term2 = gsub("-","",term2)) |> 
-    mutate(term2 = gsub("[/]","",term2)) |> 
-    mutate(term2 = gsub(", ",",",term2)) |> 
-    mutate(position2 = gsub(", ", ",", position2)) |>
-    mutate(position2 = gsub(",$","",position2)) |>
-    mutate(position2 = gsub(" meaning|,occasionally| but .*","",position2)) |>
-    mutate(position2 = if_else(term2 == "law,low","prefix,suffix",position2)) |>
-    mutate(position2 = gsub(" or ", ",", position2)) |>
-    mutate(position2 = gsub(" .*","",position2)) |>
-    mutate(position2 = gsub("\\\n","",position2)) |>
-    mutate(position2 = if_else(position2 %in% c("suffix prefix","suffix prefix"),"prefix,suffix",position2)) |>
-    mutate(position2=if_else(position2=="standalone,suffix","suffix",position2))|>
-    filter(origin2!="")|>
-    filter(!grepl("possibly",origin2,ignore.case=T))|>
-    mutate(across(where(is.character),~trimws(.x)))|>
-    select(origin2,example2,term2,position2)|>
-    mutate(position2=if_else(term2=="upon,on,in","interfix",position2))
+  # remove text in brackets
+  # from term, remove dash and slash and whitespace.
+  # from origin replace slash or whitespace with comma, then replace double comma with single
+  # add row number for splitting
+  initial_clean_df = input_df_copy |> 
+    mutate(source_row_number = row_number()) |>
+    select(term=Term, origin = Origin, position=Position, example = Example, meaning = Meaning,source_row_number) |> 
+    distinct() |> 
+    mutate(across(c("term","position","example"), tolower)) |> 
+    mutate(across(all_of(c("term","origin","position","example")),~gsub("\\s*\\[[^]]*\\]","",.x)))|>
+    mutate(across(all_of(c("term","origin","position","example")),~gsub("\\s*\\([^)]*\\)","",.x)))|>
+    mutate(term=gsub("[-]|[/]|\\s","",term)) |> 
+    mutate(term=gsub("[-]|[/]|\\s","",term)) |> 
+    mutate(origin=gsub("[/]|\\s",",",origin)) |> 
+    mutate(origin=gsub(",,",",",origin)) |>
+    mutate(position = gsub("\\s",",",position)) |> 
+    mutate(position = gsub(",,",",",position)) |> 
+    mutate(position = gsub(",,",",",position)) |> 
+    mutate(position = gsub(",$","",position)) |> 
+    mutate(position=if_else(term=="upon[,]on[,]in","interfix",position)) |> 
+    filter(origin!="") |> 
+    mutate(rn = row_number())
   
   
-  # make long-format so there is one place name per row.
-  long_df = bind_rows(lapply(split(clean_df,clean_df$example2), function(z){
-    z_origin = z$origin2[1]
-    z_term = z$term2[1]
-    z_position = z$position2[1]
-    z_out = tibble(place = unlist(strsplit(z$example2[1],", "))) |> 
-      mutate(origin = z_origin,term = z_term,position = z_position)
+  # De-concatenate, so that each origin, term, position and example has its own row
+  # replace standalone position with interfix
+  deconcatenated_df = bind_rows(
+    lapply(split(initial_clean_df,initial_clean_df$rn),
+           function(z){
+             crossing(
+               source_row_number = z$source_row_number[1],
+               origin=unlist(str_split(z$origin[1],",")),
+               term = unlist(str_split(z$term[1],",")),
+               position = unlist(str_split(z$position[1],",")),
+               example = unlist(str_split(z$example[1],","))) |> 
+               mutate(meaning=z$meaning[1])
+           }))
+  
+  # remove rows with bad origins or positions text.
+  # group by term and example, then concatenate origin and position.
+  df_filtered = deconcatenated_df|>
+    mutate(example=trimws(example)) |> 
+    filter(!example %in% c("all surrounding the city of exeter")) |> 
+    filter(origin %in% names(key_to_languages),term!="",position %in% c("",allow_string_positions)) |>
+    filter(!grepl("people of",example)) |>
+    mutate_if(is.character, str_trim)|> 
+    mutate(example=gsub("[-]|[.]|river |country | park|park |county |high |king[']s |the "," ",example)) |> 
+    mutate(example=gsub("  "," ",example)) |> 
+    mutate(example=trimws(example))
+  
+  
+  # make table of pre-assigned placename origins according to the source
+  source_placenames_origins=df_filtered |> 
+    filter(example!="",!is.na(example)) |> 
+    mutate(example = trimws(example)) |> 
+    distinct() |> 
+    group_by(example) |> 
+    summarise(origins = paste0(sort(unique(paste0(origin))),collapse=','),.groups='drop') |> 
+    dplyr::rename(place_name = example)
+  
+  
+  ## where position data are missing
+  ## test the example placenames against the term that they are associated with
+  ## create search patterns for grepl to whether the string is a prefix, suffix etc.
+  ## if the search pattern is found, then that indicates that particular position.
+  ## then extract where the positions
+  inferred_string_position_data = bind_rows(lapply(allow_string_positions, function(z){
+    
+    z_base = df_filtered|>
+      # remove instances where the term is not found in the example.
+      rowwise() |> 
+      filter(grepl(term,example))|> 
+      ungroup() |> 
+      select(source_row_number,origin,term,example) |> 
+      distinct()
+    
+    if (z=="prefix"){
+      z_dat = z_base |> 
+        mutate(search_expr = paste0( paste0("^",term) ,"|",paste0(" ",term)))
+    }
+    
+    if (z=="suffix"){
+      z_dat = z_base |> 
+        mutate(search_expr = paste0( paste0(term,"$") ,"|",paste0(term," ")))
+    }
+    
+    if (z=="standalone"){
+      z_dat = z_base |> 
+        mutate(search_expr = paste0( paste0("^",term,"$") ,"|",paste0(" ",term," ")))
+    }
+    
+    if (z=="interfix"){
+      z_dat = z_base |> 
+        mutate(search_expr = paste0( paste0("-",term,"-") ,"|",paste0(" ",term," ")))
+    }
+    
+    z_out = z_dat |> 
+      rowwise() |> 
+      mutate(position = if_else(grepl(search_expr,example),z,as.character(""))) |> 
+      ungroup() |> 
+      filter(position!="")
     z_out
   }))
   
   
-  # standardise the order of multi-origin terms. (e.g. W,C is set to C,W to prevent ambiguity)
-  origin_repaired_df = bind_rows(
-    lapply(
-      split(long_df,long_df$origin), function(z){
-        z_new_origin = paste0( sort(unique( unlist(strsplit(x = z$origin[1],split = ",")))),collapse = ",")
-        zout = z |> mutate(origin = z_new_origin)
-        zout
-      }))
+  # collapse the origin column, grouping by term and position
+  # then collapse the position column, grouping by term and origin
+  # this prevents merging where for strings the exact origin is dependent on the position in the placename, e.g. don
+  redux_inferred_string_position_data = inferred_string_position_data |> 
+    group_by(term,position) |> 
+    summarise(
+      origin = paste0(sort(unique(unlist(str_split(origin,",")))),collapse=","),
+      .groups='drop') |> 
+    group_by(term,origin) |>
+    summarise(
+      position = paste0(sort(unique(unlist(str_split(position,",")))),collapse=","),
+      .groups='drop') |> 
+    dplyr::rename(inferred_position = position)
   
   
-  # standardise terms so that they're in alphabetical order
-  # and also remove some ambiguous terms
-  term_repaired_df = bind_rows(
-    lapply(
-      split(origin_repaired_df,origin_repaired_df$term), function(z){
-        unfiltered_terms = sort(unique( unlist(strsplit(x = z$term[1],split = ","))))
-        # filtered_terms = unfiltered_terms[!unfiltered_terms %in% c("a", "at","y")]
-        filtered_terms = unfiltered_terms
-        z_new_term = paste0( filtered_terms,collapse = ",")
-        zout = z |> 
-          mutate(term = z_new_term)
-      }))
-  
-  
-  # make distinct. set missing positions to prefix and suffix
-  # important due to text inconsistencies
-  repaired_distinct_df = term_repaired_df |> 
-    distinct() |> 
-    mutate(position = if_else(position =="","prefix,suffix",position)) |> 
-    ungroup()
-  
-  
-  
-  ## Get the source-defined place name origins.
-  ## This serves as origin as assigned by experts, for later, independent of the main algorithm.
-  source_placename_origin_lookup_df=repaired_distinct_df|>
-    mutate(searchable_placename=tolower(place))|>
-    select(searchable_placename,origin)|>
-    distinct()|>
-    group_by(searchable_placename)|>
-    summarise(source_origins=paste0(sort(unique(origin)),collapse=";"),.groups='drop')
+  ## collapse the filtered df by term and position
+  # then join the inferred position data, and complete where missing
+  # then re-collapse, grouping again by term and position
+  collapsed_df = df_filtered |> 
+    group_by(term,position,meaning) |> 
+    summarise(
+      source_row_number = paste0(sort(unique(source_row_number)),collapse=","),
+      origin = paste0(sort(unique(unlist(str_split(origin,",")))),collapse=","),
+      example = paste0(sort(unique(unlist(str_split(example,",")))),collapse=","),
+      .groups = 'drop') |> 
+    left_join(redux_inferred_string_position_data) |> 
+    mutate(position = if_else(is.na(position)|position=="",inferred_position,position)) |> 
+    group_by(term,position,meaning) |> 
+    summarise(
+      source_row_number = paste0(sort(unique(source_row_number)),collapse=","),
+      origin = paste0(sort(unique(unlist(str_split(origin,",")))),collapse=","),
+      example = paste0(sort(unique(unlist(str_split(example,",")))),collapse=","),
+      .groups = 'drop') |> 
+    filter(!is.na(position),position!="") |> 
+    mutate(rn = row_number())
   
   
   
-  # get term, origin and position columns.
-  term_origin_lookup_df = repaired_distinct_df |> 
-    select(term,origin,position) |> 
-    distinct() |> 
-    mutate(rn=row_number())
+  # expand/de-concatenate the position column
+  df_with_exploded_position_column = bind_rows(
+    lapply(split(collapsed_df,collapsed_df$rn), function(z){
+      z |> 
+        select(-position) |> 
+        crossing(position = unlist(str_split(z$position[1],",")))
+    })) |> 
+    select(term,origin,position,meaning) |> 
+    mutate(term_len = nchar(term))
   
-  # expand position into columns, then make long
-  max_positions = 1+max(str_count(term_origin_lookup_df$position,","))
-  
-  term_origin_exploded = term_origin_lookup_df |> 
-    separate(position,into = paste0("p",1:max_positions),sep = ",",remove = F) |>
-    select(-rn) |> 
-    gather(plevel,pgrp,-c(term,origin,position)) |> 
-    filter(!is.na(pgrp)) |> 
-    select(-plevel,-position) |> 
-    dplyr::rename(position = pgrp) |> 
-    mutate(rn=row_number())
-  
-  
-  # simple vector of all possible search terms
-  # used for pre-filter to remove place names with no string matches at all
-  all_terms = sort(unique(trimws(unlist(lapply(split(term_origin_exploded,term_origin_exploded$rn),function(z){
-    unlist(str_split(z$term[1],pattern = ","))
-  })))))
-  
-  all_terms_concat_str = paste0(all_terms,collapse="|")
-  
-  
-  
-  ## explode the concatentated search terms, so there's one per row
-  term_origin_fin_df = bind_rows(
-    lapply(split(term_origin_exploded,term_origin_exploded$rn), function(z){
-      new_terms = sort(unique(unlist(str_split(z$term[1],pattern = ","))))
-      tibble(term = new_terms) |>
-        mutate(origin = z$origin[1],position=z$position[1]) |>
-        mutate(term = if_else(position=="interfix",paste0(" ",term," "),term)) |>
-        mutate(nchar_term=nchar(term))
-    })) 
-  
-  
-  # make search terms list structure
-  new_search_terms <- term_origin_fin_df |> 
-    select(position,origin,term) %>% 
-    split(.$position) %>% 
-    map(~ split(.x$term, .x$origin))
   
   outlist = list(
-    source_placename_origin_lookup = source_placename_origin_lookup_df,
-    all_terms_concat = all_terms_concat_str,
-    term_origin_fin = term_origin_fin_df,
-    new_search_terms_list=new_search_terms)
+    source_placename_origin_dat = source_placenames_origins,
+    term_origin_position_dat = df_with_exploded_position_column)
   outlist
-} # eof prep wiki
+  
+} ## EOF
 
 
 
-
+# make search terms list structure
+make_search_terms_list = function(
+    input_df = wiki_prepped$term_origin_position_dat){
+  output_list <- input_df |>
+    select(position,origin,term) %>%
+    split(.$position) %>%
+    map(~ split(.x$term, .x$origin))
+  output_list
+} # eof
 
 
 
@@ -295,21 +331,40 @@ make_placename_pattern_lookup=function(lookup_list=NULL){
 
 
 
+
+## new ##
 ## function, match origin to place name ##
 match_origin_to_placename <- function(
-    input_df = filtered_searchable_placenames, 
-    lookup_list = wiki_prepped$new_search_terms_list) {
+    origin_to_placename_input_df = placenames_matched_with_counties,
+    search_terms_df = wiki_prepped$term_origin_position_dat) {
   
-  compiled_lookup <- make_placename_pattern_lookup(lookup_list=lookup_list)
+  
+  # make nested search terms reference list
+  search_terms_list = make_search_terms_list(
+    input_df = search_terms_df)
+  
+  
+  all_terms_concat = paste0(sort(unique(search_terms_df$term)),collapse="|")
+  
+  # Filter place names data so that only those with any pattern matches are considered.
+  # This is in order to reduce down the search space.
+  filtered_searchable_placenames_df = origin_to_placename_input_df |>
+    select(searchable_placename)|>
+    filter(grepl(all_terms_concat,searchable_placename))  |>
+    distinct() |>
+    arrange(searchable_placename)
+  
+  
+  compiled_lookup <- make_placename_pattern_lookup(lookup_list=search_terms_list)
   
   # Extract the exact matching substrings from the place names for each pattern
   # Returns a list of character vectors (one per pattern, length = nrow(input_df))
   match_matrix <- map(compiled_lookup$pattern, \(pat) {
-    stringr::str_extract(input_df$searchable_placename, stringr::regex(pat, ignore_case = TRUE))
+    stringr::str_extract(filtered_searchable_placenames_df$searchable_placename, stringr::regex(pat, ignore_case = TRUE))
   })
   
   # Collapse the matches for each row into comma-separated strings
-  match_results <- map_dfr(1:nrow(input_df), \(row_idx) {
+  match_results <- map_dfr(1:nrow(filtered_searchable_placenames_df), \(row_idx) {
     
     # Get the extracted substrings across all patterns for this specific row
     row_matches <- map_chr(match_matrix, ~ .x[row_idx])
@@ -330,12 +385,12 @@ match_origin_to_placename <- function(
   })
   
   # Append results back to data frame
-  output_df = input_df |>
+  origin_to_placename_output_df = filtered_searchable_placenames_df |>
     mutate(
       comb_origins = match_results$comb_origins,
       exact_match_text = match_results$exact_match_text)
   
-  output_df
+  origin_to_placename_output_df
 } ## eof
 
 
@@ -459,32 +514,21 @@ make_leaflet_map=function(
     zoom_restrict=FALSE,
     starting_zoom=6){
   
-  # Clean up titles for presentation layout
-  # display_title<-case_when(ptitle=="county_pc_known"~"County % known",TRUE~ptitle)
-  # display_title<-case_when(ptitle=="county_pc_known"~"County % known",TRUE~ptitle)
-  
-  # print(display_title)
-  
   # Bind to shape file
-  leaflet_map_data_input=gb_boundaries|>
+  boundaries_with_variables_data=gb_boundaries|>
     left_join(leaflet_county_data,by=c("name"="county_name"))|>
     mutate(pc=replace_na(pc,0))
   
   # transform CRS
-  leaflet_map_data_tf=st_transform(leaflet_map_data_input,crs=4326)
+  map_data_tf=st_transform(boundaries_with_variables_data,crs=4326)
   
-  #Set colour scale ranges
-  domain_vals=leaflet_map_data_tf$pc
+  # Set colour scale ranges
+  domain_vals=map_data_tf$pc
   max_domain_vals=max(domain_vals,na.rm=TRUE)
   min_domain_vals=min(domain_vals,na.rm=TRUE)
   
-  if(is.infinite(max_domain_vals)||is.na(max_domain_vals)){
-    max_domain_vals<-100
-    min_domain_vals<-0
-  }
-  
   if (fix_percent_scale){
-    max_upper<-max(100,max_domain_vals)
+    max_upper<-max(c(100,max_domain_vals),na.rm=T)
     map_bins<-seq(0,max_upper,length.out=6)
   } else {
     map_bins<-pretty(c(min_domain_vals,max_domain_vals),n=5)
@@ -505,10 +549,11 @@ make_leaflet_map=function(
     ifelse(!is.na(x) & x == 0,"#FFFFFF",base_pal(x))
   }
   
+  
   # Make hover text
-  hover_labels=lapply(1:nrow(leaflet_map_data_tf),function(i) {
+  hover_labels=lapply(1:nrow(map_data_tf),function(i) {
     
-    row<-leaflet_map_data_tf[i,]
+    row<-map_data_tf[i,]
     
     county_name_text=paste0("<span>",row$name,"</span><br>")
     
@@ -519,53 +564,43 @@ make_leaflet_map=function(
     
     example_place_names_text <- as.character("")
     
-    # origin_and_percent_text = paste(
-    #   "<span>", paste0(round(row$pc), "%", ptitle,
-    #                    paste0("(", round(row$n_places), "/", row$n_county_places, ")", "</span>")
-                       
-                       
-    # origin_and_percent_text=paste(
-      # "<span>",paste0(round(row$pc),"%", ptitle,
-#                       
-                      # paste0("(",round(row$n_places),"/",row$n_county_places,")", "</span>")
-      
-      # example_place_names_text<-as.character("")
-      
-      if (!is.na(row$strings_and_matches[1])) {
-        
-        hover_subtext = gsub("[.]","<br>",row$strings_and_matches[1])
-        example_place_names_text <- paste0("<br><span style='font-size:8px;'>",hover_subtext,"</span>")
-      }
-      
-      htmltools::HTML(paste0(county_name_text, origin_and_percent_text, example_place_names_text))
-      })
     
-    # Make leaflet map proper
-    leaflet(data=leaflet_map_data_tf,
-            options=leafletOptions(
-              minZoom=if(zoom_restrict)starting_zoom else 5,
-              maxZoom=if(zoom_restrict)starting_zoom else 10,
-              zoomControl=!zoom_restrict,
-              dragging=!zoom_restrict,
-              preferCanvas=TRUE,
-              zoomAnimation=FALSE,fadeAnimation=FALSE))|>
-      setMaxBounds(lng1=-10,lat1=49,lng2=2,lat2=61)|>
-      setView(lng=-2.75,lat=55.25,zoom=starting_zoom)|>
-      addPolygons(
-        fillColor=~my_color_pal(pc),fillOpacity=1,
-        weight=.5,color='black',
-        popup=hover_labels,
-        popupOptions=popupOptions(
-          autoPan=FALSE,keepInView=TRUE,maxHeight=150,maxWidth = 100))|>
-      addLegend(
-        pal=base_pal,
-        values=~pc,
-        opacity=1,
-        title=ptitle,
-        position="topright")
-    } # eof
+    if (!is.na(row$strings_and_matches[1])) {
+      
+      hover_subtext = gsub("[.]","<br>",row$strings_and_matches[1])
+      example_place_names_text <- paste0("<br><span style='font-size:12px;'>",hover_subtext,"</span>")
+    }
+    
+    htmltools::HTML(paste0(county_name_text, origin_and_percent_text, example_place_names_text))
+  })
+  
+  # Make leaflet map proper
+  leaflet(
+    data=map_data_tf,
+    options=leafletOptions(
+      minZoom=if(zoom_restrict)starting_zoom else 5,
+      maxZoom=if(zoom_restrict)starting_zoom else 10,
+      zoomControl=!zoom_restrict,
+      dragging=!zoom_restrict,
+      preferCanvas=TRUE,
+      zoomAnimation=FALSE,fadeAnimation=FALSE))|>
+    setMaxBounds(lng1=-10,lat1=49,lng2=2,lat2=61)|>
+    setView(lng=-2.75,lat=55.25,zoom=starting_zoom)|>
+    addPolygons(
+      fillColor=~my_color_pal(pc),fillOpacity=1,
+      weight=.5,color='black',
+      popup=hover_labels,
+      popupOptions=popupOptions(
+        autoPan=FALSE,keepInView=TRUE,maxHeight=150,maxWidth = 100))|>
+    addLegend(
+      pal=base_pal,
+      values=~pc,
+      opacity=1,
+      title=ptitle,
+      position="topright")
+} # eof
 
-
+# refef
 
 # leaflet multi-plot wrapper function
 leaflet_multi_wrapper = function(
@@ -590,9 +625,7 @@ leaflet_multi_wrapper = function(
     df = input_df |>
       filter(origin == z)|>
       select(
-        # county_name, origin, my_value := {{plot_column}},
         county_name, origin, pc,
-        # place_23nm_vals2,
         strings_and_matches,
         n_county_places, n_places) |>
       filter(is.finite(pc)) |>
@@ -607,28 +640,6 @@ leaflet_multi_wrapper = function(
       zoom_restrict = TRUE,
       starting_zoom = 5)
   })
-  
-  # } else {
-  #   
-  #   df = input_df |>
-  #     select(county_name, my_value := {{plot_column}}) |>
-  #     filter(is.finite(my_value)) |>
-  #     distinct() |>
-  #     as.data.frame()
-  #   
-  #   is_pc = ifelse(grepl("pc$", plot_column), TRUE, FALSE)
-  #   
-  #   output_plot = make_leaflet_map(
-  #     leaflet_county_data = df,
-  #     ptitle = paste(as.character({{plot_column}})),
-  #     gb_boundaries = GB_BOUNDARIES,
-  #     is_percentage = is_pc,
-  #     fix_percent_scale = FALSE,
-  #     zoom_restrict = TRUE,
-  #     starting_zoom = 5)
-  # }
-  
-  # return(output_plot)
   
   clean_plots <- unname(output_plot)
   

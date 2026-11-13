@@ -3,9 +3,9 @@
 DATA_PATH="IPN_GB_2024/IPN_GB_2024.csv"
 
 # url where the reference data for origins and strings are stored
-WIKI_URL=paste0(
-  "https://en.wikipedia.org/wiki/",
-  "List_of_elements_in_place_names_in_the_British_Isles")
+WIKI_URL=as.character("https://en.wikipedia.org/wiki/List_of_elements_in_place_names_in_the_British_Isles")
+
+ALLOWED_STRING_POSITIONS=c("interfix","prefix","standalone","suffix")
 
 # lookup for matching abbreviated origin name with full origin name
 KEY_TO_LANGUAGES=c(
