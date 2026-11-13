@@ -13,7 +13,8 @@ get_wiki_placenames_lookup=function(wiki_url=WIKI_URL){
 
 
 
-# Alternative cleaning code for wiki data
+# Cleaning code for wiki data
+# rename ?
 
 ## Positions of terms are not always given, which makes pattern matching badly non-specific.
 ## As a solution, infer the position using the provided examples.
@@ -187,23 +188,15 @@ prepare_wiki_data = function(
 
 
 
-# make search terms list structure
-make_search_terms_list = function(
-    input_df = wiki_prepped$term_origin_position_dat){
-  output_list <- input_df |>
-    select(position,origin,term) %>%
-    split(.$position) %>%
-    map(~ split(.x$term, .x$origin))
-  output_list
-} # eof
 
 
-
-
+# clean place names data
+# rename ?
 do_initial_cleanup=function(input_df,place_types=PLACE_TYPES){
   
   # these are used with a trailing white space in order to remove full word only.
   lead_remove_strings = c(
+    "bank",
     "castle","chapel","east","easter","ferry",
     "garrison","garden","gardeners","great","gate",
     "high","higher",
@@ -214,14 +207,14 @@ do_initial_cleanup=function(input_df,place_types=PLACE_TYPES){
   
   lead_remove_strings_concat = gsub("[|]$","",paste0("^",lead_remove_strings," |",collapse = ""));
   
-  
   terminal_remove_strings = c(
+    "bank",
     "camp","castle","city","colliery","common","corner","cottages","creek","crossing",
     "east","easter","end","edge","estate",
     "docks","down","drive",
     "farm","ferry","field","fields","foot","forest",
     "garden","gardens","garrison","gate","granch","grange","green","grove",
-    "junction","lane","lodge","lower",
+    "house","junction","lane","lodge","lower",
     "marsh","mead","meadow","meadows","mill","mills","moor","old",
     "park","parks","passage","plain","place","port","priors",
     "quay","rd","side","south","st","street",
@@ -239,14 +232,14 @@ do_initial_cleanup=function(input_df,place_types=PLACE_TYPES){
     mutate(place23nm_repaired=iconv(place23nm,to="ASCII",sub="\x20")) |>
     # remove unusable place types
     filter(descnm%in%place_types)|>
+    filter(!place23nm_repaired %in% c("Area not comprised")) |> 
     filter(!(cty61nm=="Cornwall and Isles of Scilly"&descnm=="LOC"))|> 
     filter(lat!=0,long!=0,lat>49,long>(-8))|>
-    filter(!grepl(" church$| close$| closes$|  copse$| land$| lands$| park$| parks$| shop$| square$",place23nm_repaired)) |> 
+    filter(!grepl(" church$| close$| closes$| copse$| land$| lands$| park$| parks$| shop$| square$",place23nm_repaired)) |> 
     mutate(place23nm_repaired_length=nchar(place23nm_repaired)) |> 
     # remove text in bracks and after by,in.
     mutate(place23nm_mod=place23nm_repaired) |> 
     mutate(place23nm_mod=gsub("\\s*\\([^)]*\\)","",place23nm_mod)) |> 
-    # mutate(place23nm_mod = gsub("\\s+\\b(by|in|and|upon)\\b.*", "", place23nm_mod)) |> 
     mutate(place23nm_mod = gsub("\\s+\\b(by|in|and)\\b.*", "", place23nm_mod)) |>
     mutate(place23nm_mod=gsub("  "," ",place23nm_mod))|>
     mutate(place23nm_mod = trimws(place23nm_mod)) |> 
@@ -267,19 +260,18 @@ do_initial_cleanup=function(input_df,place_types=PLACE_TYPES){
                                         "",searchable_placename)) |> 
     mutate(searchable_placename=if_else(searchable_placename=="",as.character(NA),searchable_placename))
   return(output_df)
-}
+} # eof
 
 
 
-# Assign counties to locations based on lat/long and reference map
+# Assign counties to place names based on their lat/long and a reference map
+# rename ? variable names
 assign_counties_from_sf=function(
     input_df = placenames_initial_clean,
     gb_boundaries=GB_BOUNDARIES){
   
   geo_dat_input=input_df|>
-    select(tempcode,placeid,place23nm_mod,
-           # place23nm_repaired,
-           lat,long)|>
+    select(tempcode,placeid,place23nm_mod,lat,long)|>
     distinct()
   
   geo_dat_sf=st_as_sf(geo_dat_input,coords=c("long","lat"),crs=4326,remove=FALSE)
@@ -289,7 +281,6 @@ assign_counties_from_sf=function(
     st_drop_geometry()|>
     select(tempcode,placeid,
            place23nm_mod,
-           # place23nm_repaired,
            lat,long,county_name=name)
   
   known_towns=place_county_reference|>filter(!is.na(county_name)&county_name!="")
@@ -302,46 +293,67 @@ assign_counties_from_sf=function(
     missing_towns$county_name=known_towns$county_name[nearest_index]
   }
   
-  input_df |> 
-    left_join(
-      bind_rows(known_towns,missing_towns))
+  input_df |> left_join(bind_rows(known_towns,missing_towns))
 }
 
 
 
-
-
-
-# regex processor supporting custom user strings
+# Match origin search patterns to place names
+# regex processor core function.
+# used in the match_origin_to_placename function
+# too many non-specific matches. review logic.
 make_placename_pattern_lookup=function(lookup_list=NULL){
+  
   imap_dfr(lookup_list,function(origin_list,position){
     imap_dfr(origin_list,function(elements,origin){
-      processed_elements<-if(position=="prefix"){paste0("^",elements)} else if(position=="suffix") {
+      
+      processed_elements <- if (position=="prefix"){
+        paste0("^",elements)
+        
+      } else if (position=="suffix") {
         paste0(elements,"$")
+        
       } else {
-        elements
+        # elements
+        paste0(" ",elements," ")
       }
       tibble(origin=origin,pattern=paste(processed_elements,collapse="|"))
     })})|>
     group_by(origin)|>
     summarise(pattern=paste0("(",pattern,")",collapse="|"),.groups="drop")
-}
+} # eof
 
 
 
 
+# Make search terms into list structure
+# makes a nested list, using three columns of the input table
+# also filters-out terms less than a specified length
+make_search_terms_list = function(
+    input_df = wiki_prepped$term_origin_position_dat,
+    min_term_length = 2){
+  output_list <- input_df |>
+    filter(term_len>=min_term_length) |> 
+    select(position,origin,term) %>%
+    split(.$position) %>%
+    map(~ split(.x$term, .x$origin))
+  output_list
+} # eof
 
 
-## new ##
-## function, match origin to place name ##
+
+## Wrapper to match origin to place name ##
 match_origin_to_placename <- function(
     origin_to_placename_input_df = placenames_matched_with_counties,
-    search_terms_df = wiki_prepped$term_origin_position_dat) {
+    search_terms_df = wiki_prepped$term_origin_position_dat,
+    min_term_length = 2) {
   
   
   # make nested search terms reference list
   search_terms_list = make_search_terms_list(
-    input_df = search_terms_df)
+    input_df = search_terms_df,
+    min_term_length = min_term_length ## is the repeat use of the variable name ok ??
+  )
   
   
   all_terms_concat = paste0(sort(unique(search_terms_df$term)),collapse="|")
@@ -354,7 +366,7 @@ match_origin_to_placename <- function(
     distinct() |>
     arrange(searchable_placename)
   
-  
+  # too many non-specific matches. review logic.
   compiled_lookup <- make_placename_pattern_lookup(lookup_list=search_terms_list)
   
   # Extract the exact matching substrings from the place names for each pattern
@@ -443,7 +455,13 @@ post_prep_matched_names=function(
   
   ## explode so there's one row per origin, place and text match
   # takes too long.
+  max_rn = nrow(matched_and_filtered_df)
+  
   matched_exploded_df = bind_rows(lapply(split(matched_and_filtered_df,matched_and_filtered_df$rn),function(z){
+    
+    if (z$rn[1] %% 1000 == 0){
+      print(paste(z$rn[1],"/",max_rn))
+    }
     z_origins = sort(unique(unlist(str_split(z$comb_origins,pattern = ","))))
     crossing(comb_origins = z_origins,
              z |> select(county_name,place23nm_mod,text_matches))
@@ -454,7 +472,7 @@ post_prep_matched_names=function(
   # this process ensures that the total number of places in that county is constant.
   # and provides a finer-level estimate of the name origin that county.
   # then calculate what percentage of the county names are of each origin (pc column)
-  county_summary_df = matched_exploded_df |> 
+  county_summary_df = matched_exploded_df |>
     dplyr::rename(origin = comb_origins,text_match = text_matches) |> 
     group_by(county_name,place23nm_mod,text_match) |> 
     mutate(n_origins = n()) |> 
@@ -492,17 +510,17 @@ post_prep_matched_names=function(
   
   outlist = list(
     matched_and_filtered_dat = matched_and_filtered_df,
-    matched_exploded_dat = matched_exploded_df,
-    county_summary_dat = county_summary_df,
     county_plot_dat = county_plot_df)
   
+  print("completed post_prep_matched_names")
   outlist
 } ## eof
 
 
 
 
-# make leaflet county map ##
+# County map coloured by percentage ##
+# made with leaflet
 # Plots GB counties, coloured by a column specified in the wrapper.
 make_leaflet_map=function(
     leaflet_county_data=df,
@@ -600,25 +618,13 @@ make_leaflet_map=function(
       position="topright")
 } # eof
 
-# refef
 
-# leaflet multi-plot wrapper function
+
+# Leaflet multi-plot wrapper function
 leaflet_multi_wrapper = function(
-    # input_df = placenames_fin_sum_exploded,
-  # plot_column = "pc"){
-  input_df = post_prep_result_list$county_plot_dat
-){
+  input_df = post_prep_result_list$county_plot_dat){
   
-  # if (plot_column %in% c("n_places", "pc")){
-  
-  # input_df_filtered = input_df %>%
-  # { if ( plot_column == "pc") filter(., origin != "Unknown") else . } %>%
-  # ungroup()
-  
-  origin_names = sort(unique(
-    # input_df_filtered$origin
-    input_df$origin
-  ))
+  origin_names = sort(unique(input_df$origin))
   
   output_plot = lapply(origin_names, function(z){
     
@@ -669,5 +675,5 @@ leaflet_multi_wrapper = function(
     )
   )
   
-}
+} # eof
 

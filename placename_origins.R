@@ -21,8 +21,7 @@ wiki_prepped = prepare_wiki_data(
   allow_string_positions = ALLOWED_STRING_POSITIONS)
 
 
-wiki_prepped$term_origin_position_dat |> 
-  view()
+
 { 
   write_csv(
     wiki_prepped$term_origin_position_dat,
@@ -45,7 +44,8 @@ placenames_matched_with_counties=assign_counties_from_sf(placenames_initial_clea
 # base on partial string matching
 origin_placename_result = match_origin_to_placename(
   origin_to_placename_input_df = placenames_matched_with_counties,
-  search_terms_df = wiki_prepped$term_origin_position_dat)
+  search_terms_df = wiki_prepped$term_origin_position_dat,
+  min_term_length = 2)
 
 
 ## Summarise the assignment of origins to place names
@@ -56,9 +56,9 @@ post_prep_result_list = post_prep_matched_names(
   placenames_matched_with_counties_df=placenames_matched_with_counties)
 
 
+
 ## Make multiple single-origin leaflet plots.
 origins_vec=sort(unique(post_prep_result_list$county_plot_dat$origin))
-# here the text in the hover box all needs to be bigger because it's a single plot.
 plist = lapply(origins_vec, function(z){
   z_pdat=post_prep_result_list$county_plot_dat |>
     filter(origin == z) |>
