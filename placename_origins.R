@@ -4,6 +4,7 @@ library("tidyverse")
 library("sf")
 library("rnaturalearth")
 library("leaflet")
+library("stringi")
 # library("htmltools") ## used for rendering multiple leaflet plots. unsure if should be loaded here.
 
 # source custom constants and functions.
@@ -14,11 +15,20 @@ source("./functions.R")
 # Load reference table with search strips and origins
 wiki_table_raw=get_wiki_placenames_lookup(wiki_url = WIKI_URL)
 
+{ 
+  write_csv(
+    wiki_table_raw,
+    file = paste0("./","wiki_table_raw.csv"),progress = T)
+  print(paste(nrow(wiki_table_raw),"rows"))
+}
+
+
+
 # Prep wiki reference data for string-origin matching
 wiki_prepped = prepare_wiki_data(
   input_df = wiki_table_raw,
   key_to_languages = KEY_TO_LANGUAGES,
-  allow_string_positions = ALLOWED_STRING_POSITIONS)
+  allowed_string_positions = ALLOWED_STRING_POSITIONS)
 
 
 
@@ -33,11 +43,19 @@ wiki_prepped = prepare_wiki_data(
 # Load place names data
 placenames_dat_raw=readr::read_csv(paste0(Sys.getenv("DATA_PATH_ROOT"),"/",DATA_PATH), show_col_types = FALSE)
 
+
 # Basic filter and standardisation
-placenames_initial_clean=do_initial_cleanup(placenames_dat_raw)
+placenames_initial_clean=clean_placenames_data(
+  input_df = placenames_dat_raw,
+  place_types = PLACE_TYPES,
+  lead_remove_strings = LEAD_REMOVE_STRINGS,
+  terminal_remove_strings = TERMINAL_REMOVE_STRINGS)
+
 
 # Assign counties to places, based on source lat,long.
-placenames_matched_with_counties=assign_counties_from_sf(placenames_initial_clean)
+placenames_matched_with_counties=assign_counties_from_sf(
+  input_df = placenames_initial_clean,
+  gb_boundaries=GB_BOUNDARIES)
 
 
 ## Assign origins to place names

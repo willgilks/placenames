@@ -39,3 +39,27 @@ GB_BOUNDARIES <- st_transform(
     filter(region != "Northern Ireland") |>
     ungroup(), crs = 4326) |> 
   st_simplify(preserveTopology = TRUE, dTolerance = 0.001)
+
+
+
+LEAD_REMOVE_STRINGS <- c(
+  "bank", "castle", "chapel", "east", "easter", "ferry",
+  "garrison", "garden", "gardeners", "great", "gate",
+  "high", "higher", "low", "lower", "little",
+  "marsh", "middle", "new", "north", "old", "port",
+  "south", 
+  "temple","the", "upper", "west", "windmill")
+
+
+TERMINAL_REMOVE_STRINGS <- c(
+  "bank", "camp", "castle", "city", "colliery", "common", "corner", "cottages", "creek", "crossing",
+  "east", "easter", "end", "edge", "estate",
+  "docks", "down", "drive",
+  "farm", "ferry", "field", "fields", "foot", "forest",
+  "garden", "gardens", "garrison", "gate", "granch", "grange", "green", "grove",
+  "heath","house", "junction", "lane", "lodge", "lower",
+  "marsh", "mead", "meadow", "meadows", "mill", "mills", "moor", "old",
+  "park", "parks", "passage", "plain", "place", "port", "priors",
+  "quay", "rd", "side", "south", "st", "street",
+  "vale", "valley", "view", "village")
+
