@@ -273,8 +273,8 @@ assign_counties_from_sf=function(
            place23nm_mod,
            lat,long,county_name=name)
   
-  known_towns=place_county_reference|>filter(!is.na(county_name)&county_name!=)
-  missing_towns=place_county_reference|>filter(is.na(county_name)|county_name==)
+  known_towns=place_county_reference|>filter(!is.na(county_name)&county_name!="")
+  missing_towns=place_county_reference|>filter(is.na(county_name)|county_name=="")
   
   if(nrow(missing_towns)>0){
     known_sf=st_as_sf(known_towns,coords=c(long,lat),crs=4326)
@@ -501,7 +501,7 @@ post_prep_matched_names <- function(
 # Plots GB counties, coloured by a column specified in the wrapper.
 make_leaflet_map=function(
     leaflet_county_data=df,
-    ptitle=,
+    ptitle="",
     gb_boundaries=GB_BOUNDARIES,
     zoom_level=6,
     is_percentage=TRUE,
@@ -511,7 +511,7 @@ make_leaflet_map=function(
   
   # Bind to shape file
   boundaries_with_variables_data=gb_boundaries|>
-    left_join(leaflet_county_data,by=c(name=county_name))|>
+    left_join(leaflet_county_data,by=c("name"="county_name"))|>
     mutate(pc=replace_na(pc,0))
   
   # transform CRS
@@ -537,11 +537,11 @@ make_leaflet_map=function(
     palette=YlOrRd,
     domain=domain_vals,
     bins=map_bins,
-    na.color=white)
+    na.color="white")
   
   # set zero as white
   my_color_pal=function(x) {
-    ifelse(!is.na(x) & x == 0,#FFFFFF,base_pal(x))
+    ifelse(!is.na(x) & x == 0,"#FFFFFF",base_pal(x))
   }
   
   
@@ -550,20 +550,21 @@ make_leaflet_map=function(
     
     row<-map_data_tf[i,]
     
-    county_name_text=paste0(<span>,row$name,</span><br>)
+    county_name_text=paste0("<span>",row$name,"</span><br>")
     
     origin_and_percent_text = paste0(
-      <span>, round(row$pc), % , ptitle, 
-       (, round(row$n_places), /, row$n_county_places, )</span>
+      "<span>", round(row$pc), "%" , ptitle,
+       # ("," round(row$n_places), "/", row$n_county_places, )"</span>"
+      " (", round(row$n_places), "/", row$n_county_places, ")</span>"
     )
     
-    example_place_names_text <- as.character()
+    example_place_names_text <- as.character("")
     
     
     if (!is.na(row$strings_and_matches[1])) {
       
-      hover_subtext = gsub([.],<br>,row$strings_and_matches[1])
-      example_place_names_text <- paste0(<br><span style='font-size:12px;'>,hover_subtext,</span>)
+      hover_subtext = gsub("[.]","<br>",row$strings_and_matches[1])
+      example_place_names_text <- paste0("<br><span style='font-size:12px;'>",hover_subtext,"</span>")
     }
     
     htmltools::HTML(paste0(county_name_text, origin_and_percent_text, example_place_names_text))
@@ -592,7 +593,7 @@ make_leaflet_map=function(
       values=~pc,
       opacity=1,
       title=ptitle,
-      position=topright)
+      position="topright")
 } # eof
 
 
@@ -631,7 +632,7 @@ leaflet_multi_wrapper = function(
   htmltools::browsable(
     htmltools::tagList(
       htmltools::tags$head(
-        htmltools::tags$style(htmltools::HTML(
+        htmltools::tags$style(htmltools::HTML("
         .leaflet-container { background: #add8e6; }
         body { margin: 10px; } 
         /* Controls the aspect ratio layout cleanly */
@@ -645,7 +646,7 @@ leaflet_multi_wrapper = function(
         .leafsync-container > div, .sync-container > div {
           height: 380px !important; /* Makes each plot wider than it is high */
           width: 100% !important;
-        }
+        }"
       ))
       ),
       do.call(leafsync::sync, c(clean_plots, list(ncol = 3, sync.cursor = FALSE)))
